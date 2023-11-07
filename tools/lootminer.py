@@ -12,8 +12,9 @@ from collections import defaultdict
 
 import requests
 import requests_cache
+from requests.adapters import HTTPAdapter, Retry
 
-from npc import lua, petfamilies
+from npc import lua, petfamilies, pack_coords
 try:
     from zones import zones as zones_raw
 except ImportError:
@@ -23,6 +24,12 @@ except ImportError:
     pass
 zones = defaultdict(lambda: ("Unknown", (-1, -1)))
 zones.update(zones_raw)
+
+session = requests_cache.CachedSession()
+retries = Retry(total=5, backoff_factor=1, status_forcelist=[ 502, 503, 504 ])
+session.mount('http://', HTTPAdapter(max_retries=retries))
+session.mount('https://', HTTPAdapter(max_retries=retries))
+session.headers.update({'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; rv:91.0) Gecko/20100101 Firefox/91.0'})
 
 __start = ("name", "mount", "pet", "toy")
 __end = ("hidden")
@@ -37,12 +44,13 @@ def __keysort(k):
 
 
 def additemdata(item):
-    if type(item) != dict:
-        item = {1: item}
+    print("additemdata", item)
+    item = normalizeitem(item)
 
     url = f"https://wowhead.com/item={item[1]}"
-    # print("Fetching", url)
-    r = requests.get(url)
+    print("Fetching", url)
+    r = session.get(url, timeout=5)
+    print("fetch completed")
 
     if m := re.search(r'<meta property="og:title" content="([^"]+)">', r.text):
         item["name"] = html.unescape(m.group(1))
@@ -58,6 +66,12 @@ def additemdata(item):
     # });
     if m := re.search(r"new Listview\({\n\s*template: 'quest'.+?id: 'provided-for',.+?data: .+?\"id\":(\d+),", r.text, re.DOTALL):
         item["quest"] = int(m.group(1))
+    elif m := re.search(r"\(WH\.enhanceTooltip\.bind\(tt\)\)\([^\)]+?\[(\d+)\]", r.text, re.DOTALL):
+        print("found a spell, checking for quest")
+        rs = session.get(f"https://wowhead.com/spell={m.group(1)}")
+        # this might be fragile, but...
+        if m2 := re.search(r'Complete Quest.+?href="/quest=(\d+)"', rs.text):
+            item["quest"] = int(m2.group(1))
 
     if '<span class="toycolor">Toy</span>' in r.text:
         item["toy"] = True
@@ -70,9 +84,47 @@ def additemdata(item):
     return item
 
 
-def fetchnpc(npc):
+def normalizeitem(item):
+    if type(item) != dict:
+        item = {1: item}
+    return item
+
+def isvaliddrop(npc, loot, loot_filter="source"):
+    if loot_filter == "all":
+        return True
+    if loot_filter in ("source", "notable"):
+        # anything that drops from just this source is inherently notable
+        for source in loot.get("sourcemore", []):
+            if source.get("ti") == npc:
+                # Only drops from this npc
+                return True
+            if source.get("bd"):
+                # Boss drop, which means it's inherently interesting
+                return True
+    if loot_filter == "notable":
+        # Basically, is this "interesting"?
+        if loot["quality"] < 3:
+            # Blue and up only
+            return False
+        if loot["classs"] in (7, 12):
+            # Trade goods, quest items
+            return False
+        if drops := loot.get("modes", {}).get("0", False):
+            count = drops["count"]
+            outof = drops["outof"]
+            if outof != 0:
+                rate = drops["count"] / drops["outof"]
+                if rate < 0.01:
+                    return False
+        return True
+    return False
+
+
+def fetchnpc(npc, loot_filter="source"):
     url = f"https://wowhead.com/npc={npc}"
-    r = requests.get(url)
+    print("fetchnpc", npc, url)
+    r = session.get(url, timeout=5)
+    print("fetch completed", r.url)
 
     data = None
 
@@ -80,16 +132,35 @@ def fetchnpc(npc):
     # override the loader, and the default loader is a lot slower.
 
     # $.extend(g_npcs[50358], {"classification":2,"id":50358,"location":[6507],"maxlevel":38,"minlevel":38,"name":"Haywire Sunreaver Construct","react":[-1,-1],"type":9});
-    if m := re.search(r"^\$.extend\(g_npcs\[\d+], ({.+})\);$", r.text, re.MULTILINE):
+    # $.extend(g_npcs[203625], {"classification":2,"displayName":"Karokta","displayNames":["Karokta"],"id":203625,"name":"Karokta","names":["Karokta"],"type":1});
+    if m := re.search(r"^\$.extend\(g_npcs\[\d+], ?({.+})\);?$", r.text, re.MULTILINE):
         data = yaml.load(m.group(1), Loader=Loader)
         if data["id"] != npc:
+            print("couldn't find npc data in g_npcs")
             return False
+    else:
+        print("couldn't find g_npc data")
+        return False
+
+    # var g_mapperData = {"13644":[{"count":1,"coords":[[33,76.4]],"uiMapId":2022,"uiMapName":"The Waking Shores"}]};
+    if mapperDatas := re.findall(r"g_mapperData\s*=\s*({\"\d+\":\[.+\]});", r.text):
+        for mapperData in mapperDatas:
+            locations = yaml.load(mapperData, Loader=Loader)
+            for locationid, locationdatas in locations.items():
+                if "locations" not in data:
+                    data["locations"] = []
+                for locationdata in locationdatas:
+                    if "coords" in locationdata:
+                        locationdata["coords"] = [pack_coords(coord[0]/100, coord[1]/100) for coord in locationdata["coords"]]
+                        data["locations"].append(locationdata)
+                    else:
+                        print("No locationdata")
 
     if m := re.search(r"^new Listview\(({template: 'item', id: 'drops',.+})\);$", r.text, re.MULTILINE):
         lootdata = yaml.load(m.group(1).replace("undefined", "null"), Loader=Loader)
         data["loot"] = []
         for loot in lootdata["data"]:
-            if "sourcemore" in loot and 'ti' in loot["sourcemore"][0] and loot["sourcemore"][0]["ti"] == npc:
+            if isvaliddrop(npc, loot, loot_filter):
                 data["loot"].append(loot["id"])
 
     return data
@@ -111,6 +182,23 @@ def cleanloot(item):
     if len(item) == 1:
         return item[1]
     return item
+
+def output_npc(output, coords, data, indentlevel=1):
+    indent = "\t" * indentlevel
+    output.extend((
+        f"{indent}[{coords[0]}] = {{ -- {data['name']}\n",
+        len(coords) > 1 and f"{indent}\t-- {coords}\n" or "",
+        f"{indent}\tquest={data.get('quest', 'nil')},\n",
+        f"{indent}\tnpc={data['id']},\n",
+    ))
+    if data.get("loot", []):
+        output.append(f"{indent}\tloot={{\n")
+        for item in data.get("loot", []):
+            name = item.get("name", "?")
+            cleaned = cleanloot(item.copy())
+            output.append(f"{indent}\t\t{lua.serialize(cleaned, key=__keysort, trailingcomma=True)}, -- {name}\n")
+        output.append(f"{indent}\t}},\n")
+    output.append(f"{indent}}},\n")
 
 
 def update(f):
@@ -148,7 +236,7 @@ def update(f):
         outfile.writelines(output)
 
 
-def export(inf, outf, hn=False):
+def export(inf, outf, hn=False, local=False):
     mobs = {}
     with open(inf, 'r') as infile:
         for line in infile:
@@ -162,17 +250,20 @@ def export(inf, outf, hn=False):
                 print("Skipping", npcid)
                 continue
 
-            print("Loading", npcid, data["name"])
-            remote = fetchnpc(int(npcid))
+            if local:
+                data["loot"] = [normalizeitem(item) for item in data.get("loot", [])]
+            else:
+                print("Loading", npcid, data["name"])
+                remote = fetchnpc(int(npcid))
 
-            loot = data.get("loot", [])
-            if remote and "loot" in remote and len(remote["loot"]) > 0:
-                mergeloot(loot, remote["loot"])
-            if len(loot):
-                data["loot"] = [additemdata(item) for item in loot]
+                loot = data.get("loot", [])
+                if remote and "loot" in remote and len(remote["loot"]) > 0:
+                    mergeloot(loot, remote["loot"])
+                if len(loot):
+                    data["loot"] = [additemdata(item) for item in loot]
 
-            if "family" in remote and remote["family"] in petfamilies:
-                data["tameable"] = petfamilies[remote["family"]]
+                if "family" in remote and remote["family"] in petfamilies:
+                    data["tameable"] = petfamilies[remote["family"]]
 
             mobs[npcid] = data
 
@@ -181,7 +272,7 @@ def export(inf, outf, hn=False):
         mobzones = {}
         for npcid in mobs:
             data = mobs[npcid]
-            print(data)
+            # print(data)
             for zone in data["locations"]:
                 if zone not in mobzones:
                     mobzones[zone] = []
@@ -193,21 +284,7 @@ def export(inf, outf, hn=False):
                 coords = data["locations"][zone]
                 if not coords:
                     continue
-                for coord in coords:
-                    output.extend((
-                        f"\t[{coord}] = {{ -- {data['name']}{len(coords) > 1 and f' +{len(coords)}' or ''}\n",
-                        f"\t\tquest={data.get('quest', 'nil')},\n",
-                        f"\t\tnpc={npcid},\n",
-                    ))
-                    if data.get("loot", []):
-                        output.append("\t\tloot={\n")
-                        for item in data.get("loot", []):
-                            name = item["name"]
-                            cleaned = cleanloot(item.copy())
-                            output.append(f"\t\t\t{lua.serialize(cleaned, key=__keysort, trailingcomma=True)}, -- {item['name']}\n")
-                        output.append("\t\t},\n")
-                    output.append("\t},\n")
-                    break
+                output_npc(coords, data)
             output.append("})\n")
     else:
         output = [f"[{npcid}]={lua.serialize(mobs[npcid], key=__keysort, trailingcomma=True)},\n" for npcid in mobs]
@@ -216,21 +293,84 @@ def export(inf, outf, hn=False):
         outfile.writelines(output)
 
 
+def fetch_npcids_from_search(url):
+    # assume this is a wowhead search page and pull down everything included on it
+    r = session.get(url, timeout=5)
+    match = re.search(
+        r'new Listview\({[^{]+?"?data"?:\s*\[(.+?)\]}\);\n', r.text
+    )
+    if not match:
+        return []
+    return map(int, re.findall(r'"id":(\d+)', match.group(1)))
+
+
 if __name__ == '__main__':
-    requests_cache.install_cache()
+    # requests_cache.install_cache()
     # print(fetchnpc(50358))
 
     parser = argparse.ArgumentParser(description="Strip data out of wowhead")
     parser.add_argument('input', metavar="INPUT", type=str, help="Module file to use as input (wildcards work)")
     parser.add_argument('--export', nargs="?", type=str, help="Export loot data to another file rather than updating in place")
     parser.add_argument('--export_handynotes', action="store_true", default=False, help="Export in my handynotes format")
+    parser.add_argument('--local', action="store_true", default=False, help="Export local data rather than fetching anything")
+    parser.add_argument('--only_with_loot', action="store_true", default=False, help="Only output those with loot")
+    parser.add_argument('--loot_filter', action="store", choices=("source", "notable", "all"), default="source", help="")
     args = parser.parse_args()
 
-    for f in glob.glob(args.input, recursive=True):
-        if args.export:
-            print("Exporting", f)
-            export(f, args.export, hn=args.export_handynotes)
+    if re.match(r"(?:[\d,]|^http)", args.input):
+        npcids = []
+        if args.input.startswith("http"):
+            npcids = fetch_npcids_from_search(args.input)
         else:
-            print("Updating", f)
-            update(f)
+            npcids = map(int, args.input.split(","))
+
+        npcs_byzone = {
+            "UNKNOWN": []
+        }
+        for npcid in npcids:
+            npc = fetchnpc(npcid, args.loot_filter)
+            if not npc:
+                print("couldn't fetch", npcid)
+                continue
+            if args.only_with_loot and not npc.get("loot", False):
+                print("skipping no-loot")
+                continue
+            if "loot" in npc:
+                npc["loot"] = [additemdata(item) for item in npc["loot"]]
+            # print(lua.serialize(npc, key=__keysort, trailingcomma=True))
+            if "locations" in npc:
+                for location in npc["locations"]:
+                    if "uiMapId" not in location:
+                        npcs_byzone["UNKNOWN"].append(npc)
+                        continue
+                    if location["uiMapId"] not in npcs_byzone:
+                        npcs_byzone[location["uiMapId"]] = []
+                    npcs_byzone[location["uiMapId"]].append(npc)
+            else:
+                # no locations
+                npcs_byzone["UNKNOWN"].append(npc)
+
+        output = []
+        for uiMapID, npcs in npcs_byzone.items():
+            output_zone = False
+            for npc in npcs:
+                if "locations" in npc:
+                    for location in npc["locations"]:
+                        if not output_zone:
+                            output.extend(("-- ", location.get("uiMapName", "Unknown"), " (", str(location.get("uiMapId", "???")), ")\n"))
+                            output_zone = True
+                        if (location.get("uiMapId") == uiMapID) or (uiMapID == "UNKNOWN" and "uiMapId" not in location):
+                            output_npc(output, location["coords"], npc, 0)
+                else:
+                    # no locations
+                    output_npc(output, [0], npc, 0)
+        print("".join(output))
+    else:
+        for f in glob.glob(args.input, recursive=True):
+            if args.export:
+                print("Exporting", f)
+                export(f, args.export, hn=args.export_handynotes, local=args.local)
+            else:
+                print("Updating", f)
+                update(f)
 

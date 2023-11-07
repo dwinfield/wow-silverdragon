@@ -63,11 +63,30 @@ do
             mount_done = tex("VignetteKillElite", 0, 1, 0, 1), -- green shiny skull
         }
     }
+    if ns.CLASSIC then
+        icons.circles.loot = tex("WhiteDotCircle-RaidBlips", 1, 0.33, 0.33, 1.3)
+        icons.circles.loot_partial = tex("WhiteDotCircle-RaidBlips", 1, 1, 0.33, 1.3)
+        icons.circles.loot_done = tex("WhiteDotCircle-RaidBlips", 0.33, 1, 0.33, 1)
+        icons.skulls = {
+            default = tex("DungeonSkull", 1, 0.33, 0.33, 1.3), -- red skull
+            partial = tex("DungeonSkull", 1, 1, 0.33, 1.3), -- yellow skull
+            done = tex("DungeonSkull", 0.33, 1, 0.33, 1), -- green skull
+            loot = tex("VignetteKillElite", 1, 0.33, 0.33, 1.3), -- red glowing skull
+            loot_partial = tex("VignetteKillElite", 1, 1, 0.33, 1.3), -- yellow glowing skull
+            loot_done = tex("VignetteKillElite", 0.33, 1, 0.33, 1), -- green glowing skull
+            mount = tex("VignetteKillElite", 1, 0.33, 0.33, 1.8), -- red shiny skull
+            mount_partial = tex("VignetteKillElite", 1, 1, 0.33, 1.8), -- yellow shiny skull
+            mount_done = tex("VignetteKillElite", 0.33, 1, 0.33, 1), -- green shiny skull
+        }
+    end
     local function should_show_mob(id, uiMapID)
         if module.db.profile.hidden[id] or core:ShouldIgnoreMob(id, uiMapID) then
             return false
         end
         if not core:IsMobInPhase(id, uiMapID) then
+            return false
+        end
+        if ns.mobdb[id] and ns.mobdb[id].requires and not ns.conditions.check(ns.mobdb[id].requires) then
             return false
         end
         local quest, achievement, achievement_completed_by_alt = ns:CompletionStatus(id)
@@ -145,8 +164,12 @@ do
                 else
                     icon = icon_for_mob(id)
                 end
+                local alpha = icon.alpha
+                if ns.mobdb[id] and ns.mobdb[id].active and not ns.conditions.check(ns.mobdb[id].active) then
+                    alpha = alpha and (alpha * 0.6) or 0.6
+                end
                 for _, coord in ipairs(coords) do
-                    coroutine.yield(coord, id, icon, icon.scale, icon.alpha)
+                    coroutine.yield(coord, id, icon, icon.scale, alpha)
                 end
             end
         end

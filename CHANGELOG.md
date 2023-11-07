@@ -1,5 +1,169 @@
 # Changelog
 
+## Changed in v2023.7
+
+* Updated for 10.1.5 and then 10.1.7
+* Fixed error in classic_era (Vanilla)
+* Fixed some errors causing permission errors in combat (10.1.5 protected SetPassThroughButtons)
+
+## Changed in v2023.6.1
+
+* Removed Skornak's Lava Ball, which never made it to live servers
+
+## Changed in v2023.6
+
+* More Zaralek Cavern data
+* Suppress alerts while a cinematic is running
+
+## Changed in v2023.5
+
+* More Zaralek Cavern data
+* Hide the mystery vignette in Loamm
+
+## Changed in v2023.4
+
+* New Zaralek Cavern rares for 10.1.0
+* Forbidden Reach's Forbidden Hoard now has loot
+
+## Changed in v2023.3
+
+* New Forbidden Reach rares for 10.0.7
+* Make the Stormed Off rares from Primal Storms work properly for alerts
+* Was missing Overseer Stonetongue
+* Assorted minor data fixes
+
+## Changed in v2023.2
+
+* New rares for 10.0.5
+* Fix Emerald Garden Explorer's Notes / Ruby Gem Cluster Map mixup in some treasure tooltips
+
+## Changed in v2023.1
+
+* Quest ID for Liskanoth
+* Fix an error that was occuring in zones with time-gated events on days with no calendar events active
+
+## Changed in v2022.33
+
+* More mining of mobs and loot
+* Tooltips: option not to show loot while in combat, because MysticalOS complained about it taking up too much space when using mouseover macros
+* Custom / ignore options: remember rares seen this session so you can just go into settings and ignore them by checking a box, without needing to look up their ID
+* Range extender: hide some of the more inconvenient "mystery" vignettes that're just highlights for NPCs in towns. I have to manually flag these, so I'll improve these over time.
+* Added all the treasure-maps to the dragonscale expedition treasures
+* Avoid an error that could happen in some weird cases for the popup
+* Fix a few rares showing in the wrong map phase in Battle for Azeroth zones
+
+## Changed in v2022.32
+
+* Major mining of mobs and loot
+* Fix the addon being stuck in debug mode for everyone because of a bad check (say goodbye to "ID" and "location" on all the map tooltips)
+* Since we were stuck in debug mode for everyone, everyone has been getting experiemental mob-name code for the last few releases... so properly release that and clean up. This noticably reduces SavedVariables size and memory usage.
+
+## Changed in v2022.31
+
+* Differentiate treasure vignettes on GUID rather than ID -- this is going to make things like the Expedition Scout's Pack or Disturbed Dirt pop up alerts more frequently, since every separate copy of them is going to alert
+* A bunch of data improvements
+* Don't double-up on the LDB mob-tooltip
+
+## Changed in v2022.30
+
+* Questids and some added loot for all the ["super rares"](https://www.wowhead.com/news/defeat-super-rares-each-day-for-up-to-385-item-level-gear-330298), thanks to Znuff
+* Show Sleeping on the Job and Who's a Good Bakar in mob tooltips
+* Show requirements for active mobs in map tooltips, too
+
+## Changed in v2022.29
+
+* Update Dragonflight rares
+* Add Who's A Good Bakar? to tooltips
+* Improve how the popup's loot button count behaves when only showing items relevant to your character; it'll now notice when item data isn't loaded from the server completely and refresh the count once it's available
+* Fix display of the Battle For Azeroth Black Empire Assault rares, which I had tied to the continent-level icons that Blizzard removed when Dragonflight launched
+
+## Changed in v2022.28
+
+* Changed the behavior of the loot button on the popup a bit: it'll now always show if there's any loot, but loot not suitable for your character will be grayed out
+* Add the Expedition Scout's Pack loot-data for vignettes
+* Fixed an error that would pop up on logging in for people playing Wrath
+
+## Changed in v2022.27
+
+* Dragonflight data added. It's incomplete (some achievement-rares were never even seen in the beta period), so expect a bunch of releases over the next month or two.
+* Improve the model position/background in a few of the non-default popup skins
+* Workaround for the 10.0 model-interior-alpha bug in the popup models (the model still being visible until combat ended if a popup auto-hid in combat)
+
+## Changed in v2022.26
+
+* Classic: route lines were sometimes being hidden behind explored territory on maps
+
+## Changed in v2022.25
+
+* Major data improvements to Burning Crusade rares (because I also released [HandyNotes: Burning Crusade](https://www.curseforge.com/wow/addons/handynotes-burning-crusade)...)
+* Another fix for macro generation with 10.0.2's new /click requirements
+* Fix for mob tooltips being prevented from fading away in Classic
+* Minor data fixes for Warlords, including finally showing Warleader Tome's route
+
+## Changed in v2022.24
+
+* Updated for 10.0.2
+* Generate the macro based on the current ActionButtonUseKeyDown cvar
+* Include the Anniversary mobs and their loot, which should only show up during the anniversary event
+
+## Changed in v2022.23
+
+* The popup can now know about loot in treasures, including whether to give the popup the mount-alert treatment
+    * It only knows about the loot in a few Zereth Mortis treasures currently; I'm not sure how much I'm going to backfill this
+* Right-clicking the pins on the world map will work again (10.0.0 broke this)
+* Fix several ways that SilverDragon (+ the new 10.0.0 frame layout system) could cause taint that would eventually block some actions
+* Minor work towards 10.0.2 compatibility
+* Zereth Mortis: show all Gorkek's spawn points
+
+## Changed in v2022.22
+
+* Macro fixes:
+    * In Wrath the lines with `/print` were apparently causing issues
+    * In Retail, `/click` now absolutely requires that you specify the fake mouse button you want to use rather than assuming left-click
+    * As such, I've added some automatic regeneration of the macro so it can be updated to the new version without you needing to manually touch it
+    * Turns out macros on secure action buttons can be much longer than real macros, so I've reduced the number of fake passthrough macro buttons I create
+
+## Changed in v2022.21
+
+* Updated for 10.0.0 (but no data for Dragonflight rares is included yet)
+* Merged my classic and retail versions together... changing my version-number scheme because I can't base it off the TOC any more
+* Separate data-addons are no longer being used; you should delete them if your addon manager doesn't clean them up for you
+* Missing Wrath loot was added, and routes added to many Wrath rares
+* Various Pandaria locations were improved
+* A few bugs around waypoint-setting were fixed
+* Loot popups will no longer show a hint implying they can be clicked to target anything
+
+## Changed in v90207.0
+
+* Updated for 9.2.7
+* Avoid error when trying to find distance to a mob with no route to you
+
+## Changed in v90205.2
+
+* New option to only consider transmogs obtained if you have that exact item (disabled by default)
+* Some cosmetic items were incorrectly saying they wouldn't drop for anyone, mostly Korthia back items it seemed
+
+## Changed in v90205.1
+
+* New option to only show loot the current character can receive. Find it in `Settings > General > Loot`, off by default while I make sure it doesn't have any problems.
+* Better data in Pandaria; mostly fixing up the spam on the Timeless Isle and the Zandalari Warbringers
+* Better fix for the C_TransmogCollection API changes
+
+## Changed in v90205.0
+
+* Updated for 9.2.5, fixing errors about C_TransmogCollection (in a rush, so there might be followup fixes)
+* Make scrolling inside long mob list tooltips much faster
+* Added missing vignette ID for the Sinstone Hoarder in Revendreth
+
+## Changed in v90200.11
+
+* New announcement type: controller vibration, if you've enabled a controller via `/console GamePadEnable 1`
+* Option in Outputs for whether to treat known-mounts as uninteresting; you might want to uncheck this if you're e.g. helping someone else hunt for a specific mount that you've already obtained
+* Tweaks to what counts as "partially complete" for icons on the map, so non-achievement mobs with loot will be better represented
+* When sending messages to chat, include a map pin hyperlink if available
+* Add a missing mountid in Korthia
+* Some earlier-expansion loot in Cataclysm, Pandaria, and Battle for Azeroth
+
 ## Changed in v90200.10.1
 
 * Fixed an error that would happen on maps with mobs that have routes associated

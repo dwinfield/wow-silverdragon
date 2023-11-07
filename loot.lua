@@ -27,6 +27,11 @@ local function any(test, ...)
 	return false
 end
 
+local ATLAS_CHECK, ATLAS_CROSS = "common-icon-checkmark", "common-icon-redx"
+if ns.CLASSIC then
+	ATLAS_CHECK, ATLAS_CROSS = "Tracker-Check", "Objective-Fail"
+end
+
 -- we need non-localized covenant names for atlases
 -- can't use the texturekit value from covenant data, since the atlas I want doesn't conform to it
 local covenants = {
@@ -39,6 +44,7 @@ local covenants = {
 local brokenItems = {
 	-- itemid : {appearanceid, sourceid}
 	[153268] = {25124, 90807}, -- Enclave Aspirant's Axe
+	[153316] = {25123, 90885}, -- Praetor's Ornamental Edge
 }
 local function GetAppearanceAndSource(itemLinkOrID)
 	local itemID = GetItemInfoInstant(itemLinkOrID)
@@ -57,6 +63,7 @@ local function GetAppearanceAndSource(itemLinkOrID)
 end
 local canLearnCache = {}
 local function CanLearnAppearance(itemLinkOrID)
+	if not _G.C_Transmog then return false end
 	local itemID = GetItemInfoInstant(itemLinkOrID)
 	if not itemID then return end
 	if canLearnCache[itemID] ~= nil then
@@ -72,43 +79,46 @@ local function CanLearnAppearance(itemLinkOrID)
 		canLearnCache[itemID] = false
 		return false
 	end
-	local appearanceID = GetAppearanceAndSource(itemLinkOrID)
+	local appearanceID, sourceID = GetAppearanceAndSource(itemLinkOrID)
 	if not appearanceID then
 		canLearnCache[itemID] = false
 		return false
 	end
-	if not C_TransmogCollection.GetAppearanceSources(appearanceID) then
-		-- This returns nil for inappropriate appearances
-		canLearnCache[itemID] = false
-		return false
+	local hasData, canCollect = C_TransmogCollection.PlayerCanCollectSource(sourceID)
+	if hasData then
+		canLearnCache[itemID] = canCollect
 	end
-	canLearnCache[itemID] = true
-	return true
+	return canLearnCache[itemID]
 end
 local hasAppearanceCache = {}
 local function HasAppearance(itemLinkOrID)
 	local itemID = GetItemInfoInstant(itemLinkOrID)
 	if not itemID then return end
-	if hasAppearanceCache[itemID] ~= nil then
+	if hasAppearanceCache[itemID] ~= nil and core.db.profile.lootappearances then
+		-- only use the cache if we need the more expensive checks below...
+		-- and so we don't need to care about clearing it when someone
+		-- changes their settings.
 		return hasAppearanceCache[itemID]
 	end
-	local appearanceID, sourceID = GetAppearanceAndSource(itemLinkOrID)
-	if not appearanceID then
-		hasAppearanceCache[itemID] = false
-		return false
-	end
-	local _, _, _, _, sourceKnown = C_TransmogCollection.GetAppearanceSourceInfo(sourceID)
-	if sourceKnown then
+	if C_TransmogCollection.PlayerHasTransmogByItemInfo(itemLinkOrID) then
+		-- short-circuit further checks because this specific item is known
 		hasAppearanceCache[itemID] = true
 		return true
 	end
-	local sources = C_TransmogCollection.GetAppearanceSources(appearanceID)
-	if not sources then
-		hasAppearanceCache[itemID] = false
+	if not core.db.profile.lootappearances then
+		-- No fallback checks, only whether the specific item is known counts
 		return false
 	end
-	for _, source in pairs(sources) do
-		if source.isCollected == true then
+	-- Although this isn't known, its appearance might be known from another item
+	local appearanceID = GetAppearanceAndSource(itemLinkOrID)
+	if not appearanceID then
+		hasAppearanceCache[itemID] = false
+		return
+	end
+	local sources = C_TransmogCollection.GetAllAppearanceSources(appearanceID)
+	if not sources then return end
+	for _, sourceID in ipairs(sources) do
+		if C_TransmogCollection.PlayerHasTransmogItemModifiedAppearance(sourceID) then
 			hasAppearanceCache[itemID] = true
 			return true
 		end
@@ -117,22 +127,30 @@ local function HasAppearance(itemLinkOrID)
 end
 
 local function PlayerHasMount(mountid)
+	-- TODO: GetCompanionInfo somehow for Wrath?
+	if not C_MountJournal then return false end
 	return (select(11, C_MountJournal.GetMountInfoByID(mountid)))
 end
 local function PlayerHasPet(petid)
+	-- TODO: GetCompanionInfo somehow for Wrath?
+	if not C_PetJournal then return false end
 	return (C_PetJournal.GetNumCollectedInfo(petid) > 0)
 end
 local itemRestricted = function(item)
 	if type(item) ~= "table" then return false end
-	if item.covenant and item.covenant ~= C_Covenants.GetActiveCovenantID() then
+	if item.covenant and C_Covenants and item.covenant ~= C_Covenants.GetActiveCovenantID() then
 		return true
 	end
 	if item.class and select(2, UnitClass("player")) ~= item.class then
 		return true
 	end
+	if item.requires and not core.conditions.check(item.requires) then
+		return true
+	end
 	return false
 end
 local itemIsKnowable = function(item)
+	if ns.CLASSIC then return true end
 	if type(item) == "table" then
 		return (item.toy or item.mount or item.pet or item.quest or CanLearnAppearance(item[1])) -- and not itemRestricted(item)
 	end
@@ -140,6 +158,12 @@ local itemIsKnowable = function(item)
 end
 local itemIsKnown = function(item)
 	-- returns true/false/nil for yes/no/not-knowable
+	if ns.CLASSIC then
+		if type(item) == "table" and item.quest then
+			return C_QuestLog.IsQuestFlaggedCompleted(item.quest) or C_QuestLog.IsOnQuest(item.quest)
+		end
+		return GetItemCount(type(item) == "table" and item[1] or item, true) > 0
+	end
 	if type(item) == "table" then
 		if item.toy then return PlayerHasToy(item[1]) end
 		if item.mount then return PlayerHasMount(item.mount) end
@@ -154,11 +178,56 @@ end
 ns.Loot = {}
 -- _G.SDLoot = ns.Loot
 
-function ns.Loot.HasLoot(id)
-	if not (id and ns.mobdb[id]) then
+function ns.Loot.GetLootTable(id, treasure)
+	if not id then return end
+	if treasure then
+		local data = ns.vignetteTreasureLookup[id]
+		return data and data.loot
+	end
+	return ns.mobdb[id] and ns.mobdb[id].loot
+end
+
+local function suitable(item)
+	if not core.db.profile.charloot then
+		return true
+	end
+	local id = type(item) == "table" and item[1] or item
+	-- show loot for the current character only
+	-- can't pass in a reusable table for the second argument because it changes the no-data case
+	local specTable = GetItemSpecInfo(id)
+	-- Some cosmetic items seem to be flagged as not dropping for any spec. I
+	-- could only confirm this for some cosmetic back items but let's play it
+	-- safe and say that any cosmetic item can drop regardless of what the
+	-- spec info says...
+	if specTable and #specTable == 0 and not IsCosmeticItem(id) then
 		return false
 	end
-	return ns.mobdb[id].loot
+	-- then catch covenants / classes / etc
+	if itemRestricted(item) then return false end
+	return true
+end
+function ns.Loot.HasLoot(id, isTreasure)
+	local loot = ns.Loot.GetLootTable(id, isTreasure)
+	if not loot or #loot == 0 then
+		return false
+	end
+	local lootCount = 0
+	for _, item in ipairs(loot) do
+		if suitable(item) then
+			lootCount = lootCount + 1
+		end
+	end
+	return true, #loot, lootCount
+end
+function ns.Loot.OnceAllLootLoaded(id, isTreasure, callback)
+	local loot = ns.Loot.GetLootTable(id, isTreasure)
+	if not loot or #loot == 0 then return callback(loot) end
+	local continuableContainer = ContinuableContainer:Create()
+	for _, item in ipairs(loot) do
+		local itemid = type(item) == "table" and item[1] or item
+		continuableContainer:AddContinuable(Item:CreateFromItemID(itemid))
+	end
+	continuableContainer:ContinueOnLoad(function() callback(loot) end)
 end
 do
 	local function make_iter(test)
@@ -166,7 +235,7 @@ do
 			local state, item = next(t, prestate)
 			while state do
 				local ret = test(item)
-				if ret then
+				if ret and suitable(item) then
 					return state, ret, item
 				end
 				state, item = next(t, state)
@@ -186,25 +255,25 @@ do
 		end
 	end)
 	local noloot = {}
-	function ns.Loot.IterMounts(id)
-		return mount_iter, ns.mobdb[id].loot or noloot, nil
+	function ns.Loot.IterMounts(id, ...)
+		return mount_iter, ns.Loot.GetLootTable(id, ...) or noloot, nil
 	end
-	function ns.Loot.IterPets(id)
-		return pet_iter, ns.mobdb[id].loot or noloot, nil
+	function ns.Loot.IterPets(id, ...)
+		return pet_iter, ns.Loot.GetLootTable(id, ...) or noloot, nil
 	end
-	function ns.Loot.IterToys(id)
-		return toy_iter, ns.mobdb[id].loot or noloot, nil
+	function ns.Loot.IterToys(id, ...)
+		return toy_iter, ns.Loot.GetLootTable(id, ...) or noloot, nil
 	end
-	function ns.Loot.IterQuests(id)
-		return quest_iter, ns.mobdb[id].loot or noloot, nil
+	function ns.Loot.IterQuests(id, ...)
+		return quest_iter, ns.Loot.GetLootTable(id, ...) or noloot, nil
 	end
-	function ns.Loot.IterRegularLoot(id)
+	function ns.Loot.IterRegularLoot(id, ...)
 		-- this includes any transmog loot
-		return regular_iter, ns.mobdb[id].loot or noloot, nil
+		return regular_iter, ns.Loot.GetLootTable(id, ...) or noloot, nil
 	end
 end
-function ns.Loot.HasToys(id, only_knowable)
-	if not (id and ns.mobdb[id] and ns.mobdb[id].loot) then return false end
+function ns.Loot.HasToys(id, only_knowable, ...)
+	if not ns.Loot.GetLootTable(id, ...) then return false end
 	for _, _, item in ns.Loot.IterToys(id) do
 		if (not only_knowable) or (not itemRestricted(item)) then
 			return true
@@ -212,21 +281,21 @@ function ns.Loot.HasToys(id, only_knowable)
 	end
 	return false
 end
-function ns.Loot.HasMounts(id, only_knowable, only_boe)
-	if not (id and ns.mobdb[id] and ns.mobdb[id].loot) then return false end
-	for _, _, item in ns.Loot.IterMounts(id) do
+function ns.Loot.HasMounts(id, only_knowable, only_boe, ...)
+	if not ns.Loot.GetLootTable(id, ...) then return false end
+	for _, _, item in ns.Loot.IterMounts(id, ...) do
 		if ((not only_knowable) or (not itemRestricted(item)) and ((not only_boe) or item.boe)) then
 			return true
 		end
 	end
 	return false
 end
-function ns.Loot.HasInterestingMounts(id)
+function ns.Loot.HasInterestingMounts(id, ...)
 	-- This comes up a lot: mounts that you don't know, or which are BoE and so can be sold
-	return ns.Loot.Status.Mount(id, true) == false or ns.Loot.HasMounts(id, true, true)
+	return ns.Loot.Status.Mount(id, ...) == false or ns.Loot.HasMounts(id, true, true, ...)
 end
-function ns.Loot.HasPets(id, only_knowable)
-	if not (id and ns.mobdb[id] and ns.mobdb[id].loot) then return false end
+function ns.Loot.HasPets(id, only_knowable, ...)
+	if not ns.Loot.GetLootTable(id, ...) then return false end
 	for _, _, item in ns.Loot.IterPets(id) do
 		if (not only_knowable) or (not itemRestricted(item)) then
 			return true
@@ -234,56 +303,61 @@ function ns.Loot.HasPets(id, only_knowable)
 	end
 	return false
 end
-function ns.Loot.HasKnowableLoot(id)
-	if not (id and ns.mobdb[id] and ns.mobdb[id].loot) then return false end
+function ns.Loot.HasKnowableLoot(id, ...)
+	if not ns.Loot.GetLootTable(id, ...) then return false end
 	return any(itemIsKnowable, unpack(ns.mobdb[id].loot))
 end
-function ns.Loot.HasRegularLoot(id)
-	if not (id and ns.mobdb[id] and ns.mobdb[id].loot) then return false end
+function ns.Loot.HasRegularLoot(id, ...)
+	if not ns.Loot.GetLootTable(id, ...) then return false end
 	for _ in ns.Loot.IterRegularLoot(id) do
 		return true
 	end
 	return false
 end
 
-function ns.Loot.Cache(id)
-	if not (id and ns.mobdb[id] and ns.mobdb[id].loot) then return false end
-	for _, item in ipairs(ns.mobdb[id].loot) do
+function ns.Loot.Cache(id, ...)
+	local loot = ns.Loot.GetLootTable(id, ...)
+	if loot then
+		ns.Loot.CacheLootTable(loot)
+	end
+end
+function ns.Loot.CacheLootTable(loot)
+	for _, item in ipairs(loot) do
 		C_Item.RequestLoadItemDataByID(type(item) == "table" and item[1] or item)
 	end
 end
 
-ns.Loot.Status = setmetatable({}, {__call = function(_, id, include_transmog)
+ns.Loot.Status = setmetatable({}, {__call = function(_, id, include_transmog, ...)
 	-- returns nil if there's no knowable loot
 	-- returns true if all knowable loot is collected
 	-- returns false if not all knowable loot is collected
 	-- if knowable loot, also returns the status for mount,toy,pet after the first return
 	-- knowable loot that's restricted from the current character will still return true if collected, but nil if not
-	if not id or not ns.mobdb[id] then
+	if not ns.Loot.GetLootTable(id, ...) then
 		return
 	end
-	local mount = ns.Loot.Status.Mount(id)
-	local toy = ns.Loot.Status.Toy(id)
-	local pet = ns.Loot.Status.Pet(id)
-	local quest = ns.Loot.Status.Quest(id)
+	local mount = ns.Loot.Status.Mount(id, ...)
+	local toy = ns.Loot.Status.Toy(id, ...)
+	local pet = ns.Loot.Status.Pet(id, ...)
+	local quest = ns.Loot.Status.Quest(id, ...)
 	local transmog
-	if include_transmog then transmog = ns.Loot.Status.Transmog(id) end
+	if include_transmog then transmog = ns.Loot.Status.Transmog(id, ...) end
 	if (mount == nil and toy == nil and pet == nil and quest == nil and transmog == nil) then
 		return nil
 	end
 	return (mount ~= false and toy ~= false and pet ~= false and quest ~= false and transmog ~= false), mount, toy, pet, quest, transmog
 end})
-local function restrictedCheck(test, id, item)
-	local known = test(id)
+local function restrictedCheck(test, itemid, item)
+	local known = test(itemid)
 	if known then return true end
 	if known == nil or itemRestricted(item) then return nil end
 	return false
 end
 local function statusChecker(iterator, test)
-	return function(id)
-		if not id or not ns.mobdb[id] then return end
+	return function(id, ...)
+		if not ns.Loot.GetLootTable(id, ...) then return end
 		local ret = nil
-		for _, typeid, item in iterator(id) do
+		for _, typeid, item in iterator(id, ...) do
 			local known = restrictedCheck(test, typeid, item)
 			if known then
 				ret = true
@@ -294,6 +368,7 @@ local function statusChecker(iterator, test)
 		return ret
 	end
 end
+-- these all have mobid as the argument and return true/false/nil for known/unknown/none
 ns.Loot.Status.Toy = statusChecker(ns.Loot.IterToys, PlayerHasToy)
 ns.Loot.Status.Mount = statusChecker(ns.Loot.IterMounts, PlayerHasMount)
 ns.Loot.Status.Pet = statusChecker(ns.Loot.IterPets, PlayerHasPet)
@@ -336,10 +411,11 @@ local function get_tooltip(tooltip, i)
 end
 
 local Details = {
-	toy = function(tooltip, i, toyid)
+	toy = function(tooltip, i, toyid, itemdata)
 		tooltip:SetHyperlink(("item:%d"):format(toyid))
 	end,
-	mount = function(tooltip, i, mountid)
+	mount = function(tooltip, i, mountid, itemdata)
+		if not C_MountJournal then return ns.Loot.Details.item(tooltip, i, itemdata[1], itemdata) end
 		local name, spellid, texture, _, _, _, _, _, _, _, isCollected = C_MountJournal.GetMountInfoByID(mountid)
 		if not name then
 			tooltip:AddLine("mount:" .. mountid)
@@ -356,7 +432,8 @@ local Details = {
 			tooltip:AddLine(USED, 1, 0, 0)
 		end
 	end,
-	pet = function(tooltip, i, petid)
+	pet = function(tooltip, i, petid, itemdata)
+		if not C_PetJournal then return ns.Loot.Details.item(tooltip, i, itemdata[1], itemdata) end
 		local name, texture, _, mobid, source, description = C_PetJournal.GetPetInfoBySpeciesID(petid)
 		if not name then
 			tooltip:AddLine("pet:" .. petid)
@@ -370,7 +447,7 @@ local Details = {
 		tooltip:AddLine(source)
 		tooltip:AddLine(ITEM_PET_KNOWN:format(owned, limit))
 	end,
-	item = function(tooltip, i, itemid)
+	item = function(tooltip, i, itemid, itemdata)
 		tooltip:SetHyperlink(("item:%d"):format(itemid))
 	end,
 	restrictions = function(tooltip, itemdata)
@@ -390,24 +467,29 @@ local Details = {
 				(active and GREEN_FONT_COLOR or RED_FONT_COLOR):GetRGB()
 			)
 		end
+		if itemdata.requires then
+			local active = core.conditions.check(itemdata.requires)
+			tooltip:AddLine(
+				core:RenderString(core.conditions.summarize(itemdata.requires)),
+				(active and GREEN_FONT_COLOR or RED_FONT_COLOR):GetRGB()
+			)
+		end
 		tooltip:Show()
 	end,
 }
 ns.Loot.Details = Details
 
-function ns.Loot.Details.UpdateTooltip(tooltip, id, only)
-	if not (id and ns.mobdb[id]) then
-		return
-	end
+function ns.Loot.Details.UpdateTooltip(tooltip, id, only, ...)
+	if not ns.Loot.GetLootTable(id, ...) then return end
 
-	local toy = (not only or only == "toy") and ns.Loot.HasToys(id)
-	local mount = (not only or only == "mount") and ns.Loot.HasMounts(id)
-	local pet = (not only or only == "pet") and ns.Loot.HasPets(id)
-	local regular = (not only or only == "regular") and ns.Loot.HasRegularLoot(id)
+	local toy = (not only or only == "toy") and ns.Loot.HasToys(id, ...)
+	local mount = (not only or only == "mount") and ns.Loot.HasMounts(id, ...)
+	local pet = (not only or only == "pet") and ns.Loot.HasPets(id, ...)
+	local regular = (not only or only == "regular") and ns.Loot.HasRegularLoot(id, ...)
 
 	if mount then
-		for i, mountid, itemdata in ns.Loot.IterMounts(id) do
-			Details.mount(tooltip, i, mountid)
+		for i, mountid, itemdata in ns.Loot.IterMounts(id, ...) do
+			Details.mount(tooltip, i, mountid, itemdata)
 			Details.restrictions(tooltip, itemdata)
 		end
 	end
@@ -415,27 +497,27 @@ function ns.Loot.Details.UpdateTooltip(tooltip, id, only)
 		if mount then
 			tooltip:AddLine("---")
 		end
-		for i, petid, itemdata in ns.Loot.IterPets(id) do
-			Details.pet(tooltip, i, petid)
+		for i, petid, itemdata in ns.Loot.IterPets(id, ...) do
+			Details.pet(tooltip, i, petid, itemdata)
 			Details.restrictions(tooltip, itemdata)
 		end
 	end
 	local n = (pet or mount) and 2 or 1
 	local itemtip
 	if toy then
-		for i, toyid, itemdata in ns.Loot.IterToys(id) do
+		for i, toyid, itemdata in ns.Loot.IterToys(id, ...) do
 			itemtip = get_tooltip(itemtip or tooltip, n)
 			if not itemtip then return end -- out of comparisons
-			Details.toy(itemtip, n, toyid)
+			Details.toy(itemtip, n, toyid, itemdata)
 			Details.restrictions(itemtip, itemdata)
 			n = n + 1
 		end
 	end
 	if regular then
-		for i, itemid, itemdata in ns.Loot.IterRegularLoot(id) do
+		for i, itemid, itemdata in ns.Loot.IterRegularLoot(id, ...) do
 			itemtip = get_tooltip(itemtip or tooltip, n)
 			if not itemtip then return end -- out of comparisons
-			Details.item(itemtip, n, itemid)
+			Details.item(itemtip, n, itemid, itemdata)
 			Details.restrictions(itemtip, itemdata)
 			n = n + 1
 		end
@@ -459,7 +541,7 @@ local function requiresLabel(item)
 		local known = itemIsKnown(item)
 		if known or not itemRestricted(item) then
 			-- don't want to show the x, but might as well show the check
-			ret = ret .. CreateAtlasMarkup(known and "common-icon-checkmark" or "common-icon-redx")
+			ret = ret .. CreateAtlasMarkup(known and ATLAS_CHECK or ATLAS_CROSS)
 		end
 	end
 	return ret == " " and "" or ret
@@ -467,6 +549,7 @@ end
 
 local Summary = {
 	toy = function(tooltip, i, toyid, itemdata)
+		if not C_ToyBox then return ns.Loot.Summary.item(tooltip, i, itemdata[1], itemdata) end
 		local _, name, icon = C_ToyBox.GetToyInfo(toyid)
 		local owned = PlayerHasToy(toyid)
 		if name then
@@ -481,6 +564,7 @@ local Summary = {
 		end
 	end,
 	mount = function(tooltip, i, mountid, itemdata)
+		if not C_MountJournal then return ns.Loot.Summary.item(tooltip, i, itemdata[1], itemdata) end
 		local name, _, icon, _, _, _, _, _, _, _, isCollected = C_MountJournal.GetMountInfoByID(mountid)
 		if name then
 			tooltip:AddDoubleLine(
@@ -494,6 +578,7 @@ local Summary = {
 		end
 	end,
 	pet = function(tooltip, i, petid, itemdata)
+		if not C_PetJournal then return ns.Loot.Summary.item(tooltip, i, itemdata[1], itemdata) end
 		local name, icon = C_PetJournal.GetPetInfoBySpeciesID(petid)
 		local owned, limit = C_PetJournal.GetNumCollectedInfo(petid)
 		if name then
@@ -529,30 +614,30 @@ local Summary = {
 }
 ns.Loot.Summary = Summary
 
-function ns.Loot.Summary.UpdateTooltip(tooltip, id, only_knowable)
-	if not (id and ns.mobdb[id]) then
+function ns.Loot.Summary.UpdateTooltip(tooltip, id, only_knowable, ...)
+	if not ns.Loot.GetLootTable(id, ...) then
 		return
 	end
 
 	local offset = 0
 	local n = 0
-	for i, mountid, itemdata in ns.Loot.IterMounts(id) do
+	for i, mountid, itemdata in ns.Loot.IterMounts(id, ...) do
 		n = n + 1
 		Summary.mount(tooltip, i - offset, mountid, itemdata)
 	end
 	offset = n
-	for i, toyid, itemdata in ns.Loot.IterToys(id) do
+	for i, toyid, itemdata in ns.Loot.IterToys(id, ...) do
 		n = n + 1
 		Summary.toy(tooltip, i - offset, toyid, itemdata)
 	end
 	offset = n
-	for i, petid, itemdata in ns.Loot.IterPets(id) do
+	for i, petid, itemdata in ns.Loot.IterPets(id, ...) do
 		n = n + 1
 		Summary.pet(tooltip, i - offset, petid, itemdata)
 	end
 	if not only_knowable then
 		offset = n
-		for i, itemid, itemdata in ns.Loot.IterRegularLoot(id) do
+		for i, itemid, itemdata in ns.Loot.IterRegularLoot(id, ...) do
 			n = n + 1
 			Summary.item(tooltip, i - offset, itemid, itemdata)
 		end
@@ -604,13 +689,18 @@ do
 		end
 	end
 
+	-- from ItemButtonTemplate.lua
+	local function GetItemButtonIconTexture(button)
+		return button.Icon or button.icon or _G[button:GetName().."IconTexture"]
+	end
+
 	local windowPool = CreateFramePool("Frame", UIParent, "BackdropTemplate", function(framePool, frame)
 		frame:Hide()
 		frame:ClearAllPoints()
 		frame:SetParent(UIParent)
 		frame:SetFrameStrata("HIGH")
 		frame:SetMovable(false)
-		frame:RegisterForDrag(false)
+		frame:RegisterForDrag()
 		frame:SetScript("OnDragStart", nil)
 		frame:SetScript("OnDragStop", nil)
 		frame.independent = nil
@@ -618,7 +708,7 @@ do
 			frame:Reset()
 		end
 	end)
-	local buttonPool = CreateFramePool("ItemButton", nil, nil, function(framePool, button)
+	local buttonPool = CreateFramePool(ns.CLASSIC and "BUTTON" or "ItemButton", nil, ns.CLASSIC and "ItemButtonTemplate" or nil, function(framePool, button)
 		if button.RestrictionIcon then
 			button.RestrictionIcon:Hide()
 			button.KnownIcon:Hide()
@@ -627,6 +717,24 @@ do
 		button:ClearAllPoints()
 		button:SetParent(nil)
 		button:Hide()
+		GetItemButtonIconTexture(button):SetDesaturated(false)
+
+		-- classic
+		if not button.SetItem then
+			function button:SetItem(item)
+				local itemID, itemType, itemSubType, itemEquipLoc, icon, classID, subclassID = GetItemInfoInstant(item)
+				if itemID then
+					self.itemID = itemID
+					SetItemButtonTexture(button, icon)
+				end
+			end
+			function button:GetItemID()
+				return self.itemID
+			end
+			function button:GetItemLink()
+				return select(2, GetItemInfo(self.itemID))
+			end
+		end
 	end)
 	local timerPool = CreateFramePool("Frame", UIParent, nil, function(framePool, frame)
 		frame:Hide()
@@ -767,6 +875,7 @@ do
 					if item.count then
 						button:SetItemButtonCount(item.count)
 					end
+					-- TODO: show icon for spec if GetItemSpecInfo says it doesn't drop for the current spec
 					if item.covenant and covenants[item.covenant] then
 						button.RestrictionIcon:SetAtlas(("covenantchoice-panel-sigil-%s"):format(covenants[item.covenant]))
 						button.RestrictionIcon:SetSize(16, 20) -- these are 73x96 natively
@@ -781,9 +890,12 @@ do
 					local known = itemIsKnown(item)
 					if known or not itemRestricted(item) then
 						-- don't show the x for restricted items
-						button.KnownIcon:SetAtlas(known and "common-icon-checkmark" or "common-icon-redx")
+						button.KnownIcon:SetAtlas(known and ATLAS_CHECK or ATLAS_CROSS)
 						button.KnownIcon:Show()
 					end
+				end
+				if not suitable(item) then
+					GetItemButtonIconTexture(button):SetDesaturated(true)
 				end
 			end
 
@@ -867,8 +979,8 @@ do
 		core.events:Fire("LootWindowReleased", window)
 	end
 
-	function ns.Loot.Window.ShowForMob(id, independent)
-		if not (id and ns.mobdb[id] and ns.mobdb[id].loot) then
+	function ns.Loot.Window.ShowForMob(id, independent, ...)
+		if not ns.Loot.GetLootTable(id, ...) then
 			-- TODO: error message
 			return false
 		end
@@ -891,8 +1003,11 @@ do
 		else
 			window = GetWindow()
 		end
-		window:AddLoot(ns.mobdb[id].loot)
+		window:AddLoot(ns.Loot.GetLootTable(id, ...))
 		window:Show()
+
+		-- get this ready:
+		ns.Tooltip.Get("Loot")
 
 		core.events:Fire("LootWindowOpened", window)
 
@@ -905,7 +1020,7 @@ do
 	-- })
 
 	-- /script SilverDragon:ShowLootWindowForMob(160821)
-	function core:ShowLootWindowForMob(id)
-		local window = ns.Loot.Window.ShowForMob(id, true)
+	function core:ShowLootWindowForMob(id, ...)
+		local window = ns.Loot.Window.ShowForMob(id, true, ...)
 	end
 end

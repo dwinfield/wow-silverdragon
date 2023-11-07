@@ -6,6 +6,9 @@ local Debug = core.Debug
 
 local LSM = LibStub("LibSharedMedia-3.0")
 
+-- testing snippet:
+-- /script C_Timer.After(2, function() SilverDragon:GetModule("Announce"):Seen("_", 32491, 120, 0.490, 0.362, false, "fake") end)
+
 -- Register some media
 LSM:Register("sound", "Rubber Ducky", 566121)
 LSM:Register("sound", "Cartoon FX", 566543)
@@ -66,6 +69,18 @@ function module:OnInitialize()
 			flash_boss = false,
 			flash_texture_boss = "Blizzard Low Health",
 			flash_color_boss = {r=1,g=0,b=1,a=1,},
+			vibrate = true,
+			vibrate_type = "High",
+			vibrate_intensity = 1,
+			vibrate_mount = true,
+			vibrate_type_mount = "Low",
+			vibrate_intensity_mount = 1,
+			vibrate_boss = true,
+			vibrate_type_boss = "High",
+			vibrate_intensity_boss = 1,
+			vibrate_loot = true,
+			vibrate_type_loot = "High",
+			vibrate_intensity_loot = 0.8,
 			instances = false,
 			dead = true,
 			already = false,
@@ -77,6 +92,7 @@ function module:OnInitialize()
 			unmute = false,
 			background = false,
 			loot = true,
+			known_mounts = true,
 		},
 	})
 
@@ -145,17 +161,61 @@ function module:OnInitialize()
 			color.r, color.g, color.b, color.a = r, g, b, a
 		end
 
+		local fake_args = {
+			-- this is a vanilla mob
+			deathmaw = faker(10077, "Deathmaw (Tame!)", 29, 0.5, 0.5),
+		}
+		if LE_EXPANSION_LEVEL_CURRENT >= (LE_EXPANSION_WRATH_OF_THE_LICH_KING or 999) then
+			fake_args.time = faker(32491, "Time-Lost Proto Drake (Mount!)", 120, 0.490, 0.362)
+			fake_args.vyragosa = faker(32630, "Vyragosa (Boring)", 120, 0.5, 0.5)
+		end
+		if not ns.CLASSIC then
+			-- id, name, zone, x, y, is_dead, is_new_location, source, unit
+			-- ishak = faker(157134, "Ishak of the Four Winds (Mount!)", 1527, 0.73, 0.83)
+			fake_args.anger = faker(60491, "Sha of Anger (Boss!)", 809, 0.5, 0.5)
+			-- haakun = faker(83008, "Haakun", 946, 0.5, 0.5)
+			fake_args.yiphrim = faker(157473, "Yiphrim the Will Ravager (Toy!)", 1527, 0.5, 0.786)
+			fake_args.amalgamation = faker(157593, "Amalgamation of Flesh (Pet!)", 1527, 0.598, 0.724)
+			-- alash = faker(148787, "Alash'anir", 62, 0.598, 0.724)
+			-- burninator = faker(149141, "Burninator Mk V (Pet!)", 62, 0.414, 0.764)
+			fake_args.worldedge = faker(160821, "Worldedge Gorger (mount)", 1525, 0.5, 0.5)
+			fake_args.tarahna = faker(126900, "Instructor Tarahna (multi-toy)", 882, 0.5, 0.5)
+			fake_args.nerissa = faker(162690, "Nerissa Heartless (mount)", 1536, 0.5, 0.5)
+			-- faeflayer = faker(171688, "Faeflayer", 1536, 0.5, 0.5)
+			fake_args.scrapking = faker(151625, "Scrap King (loot)", 1462, 0.5, 0.5)
+			fake_args.kash = faker(159105, "Collector Kash (lots of loot)", 1536, 0.5, 0.5)
+			-- worldcracker = faker(180032, "Wild Worldcracker", 1961, 0.5, 0.5)
+			-- blanchy = faker(173468, "Dead Blanchy", 1525, 0.5, 0.5)
+			fake_args.chest = {
+				type = "execute", name = "Waterlogged Chest",
+				desc = "Fake seeing a Waterlogged Chest",
+				func = function()
+					-- id, zone, x, y, instanceid
+					core.events:Fire("SeenLoot", "Waterlogged Chest", 3341, 37, 0.318, 0.628)
+				end
+			}
+			fake_args.mount_chest = {
+				type = "execute", name = "Mawsworn Supply Chest (mount)",
+				desc = "Fake seeing a Mawsworn Supply Chest, which contains a mount",
+				func = function()
+					-- id, zone, x, y, instanceid
+					core.events:Fire("SeenLoot", "Mawsworn Supply Chest", 4969, 1970, 0.318, 0.628)
+				end
+			}
+		end
+
 		local options = {
 			general = {
-				type = "group", name = "General", inline = true,
+				type = "group", name = "Announcements", inline = true,
 				order = 10,
 				get = get, set = set,
 				args = {
 					already = toggle("Already found", "Announce when we see rares we've already killed / achieved (if known)", 0),
-					already_drop = toggle("Got the loot", "Announce when we see rares which drop a mount / toy / pet you already have", 10),
-					already_transmog = toggle("...include transmog as loot", "Count transmog appearances as knowable loot for the previous option?", 11),
+					already_drop = toggle("Got the loot", "Still announce when we see rares which drop a mount / toy / pet you already have", 10),
+					already_transmog = toggle("...include transmog as loot", "Count transmog appearances as knowable loot", 11),
 					already_alt = toggle("Completed by an alt", "Announce when we see rares for an achievement that the current character doesn't have, but an alt has completed already", 20),
-					dead = toggle("Dead rares", "Announce when we see dead rares, if known. Not all scanning methods know whether a rare is dead or not, so this isn't entirely reliable.", 30),
+					known_mounts = toggle("Known mounts are boring", "Treat mount-dropping rares whose mount you already know as if they're regular rares (unless the mount is BoE)", 25),
+					dead = toggle("Dead rares", "Announce when we see dead rares, if known. Not all scanning methods know whether a rare is dead or not", 30),
 					instances = toggle("Instances", "Show announcements while in an instance", 50),
 					loot = toggle("Treasures", "Show announcements when treasure appears on the minimap", 60),
 				},
@@ -172,34 +232,7 @@ function module:OnInitialize()
 			test = {
 				type = "group", name = "Test it!",
 				inline =  true,
-				args = {
-					-- id, name, zone, x, y, is_dead, is_new_location, source, unit
-					time = faker(32491, "Time-Lost Proto Drake (Mount!)", 120, 0.490, 0.362),
-					-- ishak = faker(157134, "Ishak of the Four Winds (Mount!)", 1527, 0.73, 0.83),
-					anger = faker(60491, "Sha of Anger (Boss!)", 809, 0.5, 0.5),
-					vyragosa = faker(32630, "Vyragosa (Boring)", 120, 0.5, 0.5),
-					deathmaw = faker(10077, "Deathmaw (Tame!)", 29, 0.5, 0.5),
-					-- haakun = faker(83008, "Haakun", 946, 0.5, 0.5),
-					yiphrim = faker(157473, "Yiphrim the Will Ravager (Toy!)", 1527, 0.5, 0.786),
-					amalgamation = faker(157593, "Amalgamation of Flesh (Pet!)", 1527, 0.598, 0.724),
-					-- alash = faker(148787, "Alash'anir", 62, 0.598, 0.724),
-					-- burninator = faker(149141, "Burninator Mk V (Pet!)", 62, 0.414, 0.764),
-					worldedge = faker(160821, "Worldedge Gorger (mount)", 1525, 0.5, 0.5),
-					tarahna = faker(126900, "Instructor Tarahna (multi-toy)", 882, 0.5, 0.5),
-					nerissa = faker(162690, "Nerissa Heartless (mount)", 1536, 0.5, 0.5),
-					-- faeflayer = faker(171688, "Faeflayer", 1536, 0.5, 0.5),
-					scrapking = faker(151625, "Scrap King (loot)", 1462, 0.5, 0.5),
-					kash = faker(159105, "Collector Kash (lots of loot)", 1536, 0.5, 0.5),
-					-- worldcracker = faker(180032, "Wild Worldcracker", 1961, 0.5, 0.5),
-					chest = {
-						type = "execute", name = "Waterlogged Chest",
-						desc = "Fake seeing a Waterlogged Chest",
-						func = function()
-							-- id, zone, x, y, is_dead, source, unit
-							core.events:Fire("SeenLoot", "Waterlogged Chest", 3341, 37, 0.318, 0.628)
-						end,
-					},
-				},
+				args = fake_args,
 			},
 			sound = {
 				type = "group", name = "Sounds",
@@ -209,7 +242,7 @@ function module:OnInitialize()
 					about = config.desc("Play sounds to announce rare mobs? Can do special things for special mobs. You *really* don't want to miss, say, the Time-Lost Proto Drake, after all...", 0),
 					channel = {
 						type = "select",
-						name = _G.SOUND_CHANNELS,
+						name = _G.SOUND_CHANNELS or _G.AUDIO_CHANNELS, -- dragonflight
 						descStyle = "inline",
 						values = {
 							Ambience = _G.AMBIENCE_VOLUME,
@@ -330,11 +363,65 @@ function module:OnInitialize()
 						order = 24,
 					},
 				},
-			}
+			},
+			controller = {
+				type = "group", name = "Controller",
+				get = get, set = set,
+				disabled = function(info) return info[#info] ~= "controller" and not C_GamePad.IsEnabled() end,
+				order = 15,
+				args = {
+					about = config.desc("Vibrate a connected controller when a rare is seen. Only works if controller support is enabled. You can turn it on by typing `/console GamePadEnable 1` in the chat box.", 0),
+				},
+			},
 		}
 
-		config.options.args.outputs.plugins.announce = options
+		local function vibrate_section(t, key, order, heading)
+			key = key and ("_"..key) or ""
+			if heading then
+				t["vibrate_heading" .. key] = {type="header", name="", order=order,}
+			end
+			t["vibrate" .. key] = toggle(heading or "Vibrate", "Vibrate the controller?", order + 1)
+			t["vibrate_type" .. key] = {
+				type = "select", name = "Type",
+				desc = "What type of vibration to use",
+				values = {
+					Low = "Low",
+					High = "High",
+					LTrigger = "LTrigger (PS5 only)",
+					RTrigger = "RTrigger (PS5 only)",
+				},
+				order = order + 2,
+			}
+			t["vibrate_intensity" .. key] = {
+				type = "range", name = "Intensity",
+				desc = "How strong the vibration should be",
+				min = 0, max = 1, step = 0.1,
+				order = order + 3,
+			}
+			t["preview" .. key] = {
+				type = "execute", name = PREVIEW,
+				func = function(info)
+					C_GamePad.SetVibration(self.db.profile["vibrate_type" .. key], self.db.profile["vibrate_intensity" .. key])
+				end,
+				order = order + 4,
+			}
+			return order + 5
+		end
+		local order = 1
+		order = vibrate_section(options.controller.args, nil, 1)
+		order = vibrate_section(options.controller.args, "mount", order, "Vibrate for mounts")
+		order = vibrate_section(options.controller.args, "boss", order, "Vibrate for bosses")
+		order = vibrate_section(options.controller.args, "loot", order, "Vibrate for loot")
+
+		config.options.args.general.plugins.announce = options
 	end
+end
+
+function module:HasInterestingMounts(id, isloot)
+	if not module.db.profile.known_mounts then
+		return ns.Loot.HasMounts(id, nil, nil, isloot)
+	end
+	return ns.Loot.HasInterestingMounts(id, isloot)
 end
 
 function module:Seen(callback, id, zone, x, y, is_dead, source, ...)
@@ -381,7 +468,10 @@ function module:ShouldAnnounce(id, zone, x, y, is_dead, source, ...)
 		Debug("ShouldAnnounce", false, "already got loot")
 		return false
 	end
-	if ns.mobdb[id] and ns.mobdb[id].requires and not ns.conditions.check(ns.mobdb[id].requires) then
+	if ns.mobdb[id] and (
+		(ns.mobdb[id].requires and not ns.conditions.check(ns.mobdb[id].requires)) or
+		(ns.mobdb[id].active and not ns.conditions.check(ns.mobdb[id].active))
+	) then
 		Debug("ShouldAnnounce", false, "requirements not met")
 		return false
 	end
@@ -426,28 +516,38 @@ core.RegisterCallback("SD Announce Sink", "Announce", function(callback, id, zon
 			source = "by " .. player .. " in your " .. strlower(channel) .. "; " .. localized_zone
 		end
 	end
+	local pin = ""
 	if x and y then
 		if x == 0 and y == 0 then
 			source = source .. " @ unknown location"
 		else
-			source = source .. " @ " .. core.round(x * 100, 1) .. "," .. core.round(y * 100, 1)
+			source = source .. (" @ %.1f, %.1f"):format(x * 100, y * 100)
+			if module.db.profile.sink_opts.sink20OutputSink == "ChatFrame" and MAP_PIN_HYPERLINK then
+				pin = (" |cffffff00|Hworldmap:%d:%d:%d|h[%s]|h|r"):format(
+					zone, x * 10000, y * 10000, MAP_PIN_HYPERLINK
+				)
+			end
 		end
 	end
-	local prefix = "Rare seen: "
-	module:Pour((prefix .. "%s%s (%s)"):format(core:GetMobLabel(id), dead and "... but it's dead" or '', source or ''))
+	module:Pour(("Rare seen: %s%s (%s)%s"):format(core:GetMobLabel(id), dead and "... but it's dead" or '', source or '', pin))
 end)
-core.RegisterCallback("SD AnnounceLoot Sink", "AnnounceLoot", function(callback, name, id, zone, x, y)
+core.RegisterCallback("SD AnnounceLoot Sink", "AnnounceLoot", function(callback, name, id, zone, x, y, instanceid)
 	if not module.db.profile.sink then
 		return
 	end
 
 	Debug("Pouring")
+	local pin = ""
 	local location = UNKNOWN
 	if x and y and x > 0 and y > 0 then
-		location = core.round(x * 100, 1) .. "," .. core.round(y * 100, 1)
+		location = ("%.1f, %.1f"):format(x * 100, y * 100)
+		if module.db.profile.sink_opts.sink20OutputSink == "ChatFrame" and MAP_PIN_HYPERLINK then
+			pin = (" |cffffff00|Hworldmap:%d:%d:%d|h[%s]|h|r"):format(
+				zone, x * 10000, y * 10000, MAP_PIN_HYPERLINK
+			)
+		end
 	end
-	local prefix = "Treasure seen: "
-	module:Pour((prefix .. "%s (%s)"):format(name, location))
+	module:Pour(("Treasure seen: %s (%s)%s"):format(name, location, pin))
 end)
 
 local cvar_overrides
@@ -527,7 +627,7 @@ core.RegisterCallback("SD Announce Sound", "Announce", function(callback, id, zo
 		if channel == "GUILD" and not module.db.profile.soundguild or (channel == "PARTY" or channel == "RAID") and not module.db.profile.soundgroup then return end
 	end
 	local soundfile, loops
-	if ns.Loot.HasInterestingMounts(id) then
+	if module:HasInterestingMounts(id) then
 		if not module.db.profile.sound_mount then return end
 		soundfile = module.db.profile.soundfile_mount
 		loops = module.db.profile.sound_mount_loop
@@ -542,17 +642,26 @@ core.RegisterCallback("SD Announce Sound", "Announce", function(callback, id, zo
 	end
 	module:PlaySound{soundfile = soundfile, loops = loops}
 end)
-core.RegisterCallback("SD AnnounceLoot Sound", "AnnounceLoot", function(callback, id, zone, x, y, dead, source)
+core.RegisterCallback("SD AnnounceLoot Sound", "AnnounceLoot", function(callback, name, id, zone, x, y, instanceid)
 	if not (module.db.profile.sound_loot and LSM) then
 		return
 	end
 	if nowplaying then return end
-	module:PlaySound{soundfile = module.db.profile.soundfile_loot, loops = module.db.profile.sound_loot_loop}
+	local soundfile, loops
+	if module:HasInterestingMounts(id, true) then
+		if not module.db.profile.sound_mount then return end
+		soundfile = module.db.profile.soundfile_mount
+		loops = module.db.profile.sound_mount_loop
+	else
+		soundfile = module.db.profile.soundfile_loot
+		loops = module.db.profile.sound_loot_loop
+	end
+	module:PlaySound{soundfile = soundfile, loops = loops}
 end)
 
 do
 	local flashframe
-	function module:Flash(id)
+	function module:Flash(id, isloot)
 		if not module.db.profile.flash then
 			return
 		end
@@ -593,7 +702,7 @@ do
 				local background = module.db.profile.flash_texture
 				local color = module.db.profile.flash_color
 				if self.id and ns.mobdb[self.id] then
-					if ns.Loot.HasInterestingMounts(self.id) and module.db.profile.flash_mount then
+					if module.db.profile.flash_mount and module:HasInterestingMounts(id, isloot) then
 						background = module.db.profile.flash_texture_mount
 						color = module.db.profile.flash_color_mount
 					elseif ns.mobdb[self.id].boss and module.db.profile.flash_boss then
@@ -617,7 +726,32 @@ do
 	core.RegisterCallback("SD Announce Flash", "Announce", function(callback, id)
 		module:Flash(id)
 	end)
-	core.RegisterCallback("SD AnnounceLoot Flash", "AnnounceLoot", function(callback, id)
-		module:Flash(id)
+	core.RegisterCallback("SD AnnounceLoot Flash", "AnnounceLoot", function(callback, name, id)
+		module:Flash(id, true)
 	end)
 end
+
+core.RegisterCallback("SD Announce Controller", "Announce", function(callback, id, zone, x, y, dead, source)
+	local vibrate_type, vibrate_intensity
+	if module:HasInterestingMounts(id) then
+		if not module.db.profile.vibrate_mount then return end
+		vibrate_type = module.db.profile.vibrate_type_mount
+		vibrate_intensity = module.db.profile.vibrate_intensity_mount
+	elseif ns.mobdb[id] and ns.mobdb[id].boss then
+		if not module.db.profile.vibrate_boss then return end
+		vibrate_type = module.db.profile.vibrate_type_boss
+		vibrate_intensity = module.db.profile.vibrate_intensity_boss
+	else
+		if not module.db.profile.vibrate then return end
+		vibrate_type = module.db.profile.vibrate_type
+		vibrate_intensity = module.db.profile.vibrate_intensity
+	end
+	C_GamePad.SetVibration(vibrate_type, vibrate_intensity)
+end)
+core.RegisterCallback("SD AnnounceLoot Controller", "AnnounceLoot", function(callback, name, id, zone, x, y, instanceid)
+	if not module.db.profile.vibrate_loot then
+		return
+	end
+	C_GamePad.SetVibration(module.db.profile.vibrate_type_loot, module.db.profile.vibrate_intensity_loot)
+end)
+

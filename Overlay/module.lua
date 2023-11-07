@@ -235,8 +235,20 @@ function module:ShowTooltip(pin)
             self.lootwindow:SetAutoHideDelay(0.25, {pin, tooltip}, function()
                 self:CleanupTooltip()
             end)
-
-            core.events:Fire("LootWindowOpened", self.lootwindow)
+        end
+        if ns.mobdb[id].requires then
+            local metRequirements = not ns.conditions.check(ns.mobdb[id].requires)
+            tooltip:AddLine(
+                core:RenderString(ns.conditions.summarize(ns.mobdb[id].requires), ns.mobdb[id]),
+                metRequirements and 0 or 1, metRequirements and 1 or 0, 0, true
+            )
+        end
+        if ns.mobdb[id].active then
+            local isActive = not ns.conditions.check(ns.mobdb[id].active)
+            tooltip:AddLine(
+                core:RenderString(ns.conditions.summarize(ns.mobdb[id].active), ns.mobdb[id]),
+                isActive and 0 or 1, isActive and 1 or 0, 0, true
+            )
         end
     else
         tooltip:AddLine(UNKNOWN)
@@ -249,10 +261,10 @@ function module:ShowTooltip(pin)
     end
 
     if pin:Config().tooltip_help then
-        tooltip:AddDoubleLine(ALT_KEY_TEXT .. " + " .. escapes.leftClick, MAP_PIN, 0, 1, 1, 0, 1, 1 )
-        if C_Map.CanSetUserWaypointOnMap(pin.uiMapID) then
-            tooltip:AddDoubleLine(SHIFT_KEY_TEXT .. " + " .. escapes.leftClick, TRADESKILL_POST, 0, 1, 1, 0, 1, 1 )
+        if core:GetModule("TomTom"):CanPointTo(pin.uiMapID) then
+            tooltip:AddDoubleLine(ALT_KEY_TEXT .. " + " .. escapes.leftClick, MAP_PIN, 0, 1, 1, 0, 1, 1 )
         end
+        tooltip:AddDoubleLine(SHIFT_KEY_TEXT .. " + " .. escapes.leftClick, TRADESKILL_POST, 0, 1, 1, 0, 1, 1 )
         tooltip:AddDoubleLine(SHIFT_KEY_TEXT .. " + " .. escapes.rightClick, HIDE, 0, 1, 1, 0, 1, 1 )
     end
 

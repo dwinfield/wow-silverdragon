@@ -201,7 +201,24 @@ function module:SetupDataObject()
 end
 
 function module:SetupWorldMap()
-	local button = WorldMapFrame:AddOverlayFrame(nil, "Button", "RIGHT", WorldMapFrame.NavBar, "RIGHT", -4, 0)
+	local button
+	if WorldMapFrame.AddOverlayFrame then
+		-- This taints currently:
+		-- button = WorldMapFrame:AddOverlayFrame(nil, "Button", "RIGHT", WorldMapFrame.NavBar, "RIGHT", -4, 0)
+		-- so for now just do this:
+		button = CreateFrame("Button", nil, WorldMapFrame.NavBar)
+		button:SetPoint("RIGHT", WorldMapFrame.NavBar, "RIGHT", -4, 0)
+		hooksecurefunc(WorldMapFrame, "OnMapChanged", function()
+			button:Refresh()
+		end)
+	else
+		-- classic!
+		button = CreateFrame("Button", nil, WorldMapFrame)
+		button:SetPoint("TOPRIGHT", -45, -2)
+		hooksecurefunc(WorldMapFrame, "OnMapChanged", function()
+			button:Refresh()
+		end)
+	end
 	button:SetSize(20, 20)
 	button:RegisterForClicks("AnyUp")
 	button.texture = button:CreateTexture(nil, "ARTWORK")
@@ -403,7 +420,15 @@ do
 			return
 		end
 		core.events:Fire("BrokerMobClick", mobid)
-		OpenWorldMap(zone)
+		if WorldMapFrame.HandleUserActionOpenSelf then
+			OpenWorldMap(zone)
+		else
+			-- Classic
+			if not WorldMapFrame:IsVisible() then
+				ToggleWorldMap()
+			end
+			WorldMapFrame:SetMapID(zone)
+		end
 	end
 
 	local function show_loot_tooltip(cell, mobid, only)
@@ -477,7 +502,10 @@ do
 				end
 			end
 		end
-		core:GetModule("Tooltip"):UpdateTooltip(mobid, true, true)
+		if not _G.TooltipDataProcessor then
+			-- if that exists it'll already have magically handled the gametooltip
+			core:GetModule("Tooltip"):UpdateTooltip(mobid, true, true)
+		end
 		GameTooltip:AddLine("Left-click to focus on the map", 0, 1, 1)
 		GameTooltip:AddLine("Control-click to set a waypoint", 0, 1, 1)
 		GameTooltip:AddLine("Shift-click to link location in chat", 0, 1, 1)
@@ -510,6 +538,7 @@ do
 			tooltip = LibQTip:Acquire("SilverDragonTooltip", 10, "LEFT", "CENTER", "RIGHT", "CENTER", "RIGHT", "RIGHT", "RIGHT", "RIGHT", "RIGHT", "RIGHT")
 			tooltip:SetAutoHideDelay(0.25, parent)
 			tooltip:SmartAnchorTo(parent)
+			tooltip:SetScrollStep(50)
 			tooltip.OnRelease = function() tooltip = nil end
 		end
 

@@ -7,12 +7,15 @@ SilverDragon = addon
 SilverDragon.NAMESPACE = ns -- for separate addons
 addon.events = LibStub("CallbackHandler-1.0"):New(addon)
 
+ns.CLASSIC = WOW_PROJECT_ID ~= WOW_PROJECT_MAINLINE
+ns.CLASSICERA = WOW_PROJECT_ID == WOW_PROJECT_CLASSIC -- forever vanilla
+
 local faction = UnitFactionGroup("player")
 
 local Debug
 do
 	local TextDump = LibStub("LibTextDump-1.0")
-	local debuggable = GetAddOnMetadata(myname, "Version") == '@project-version@'
+	local debuggable = GetAddOnMetadata(myname, "Version") == '@'..'project-version@'
 	local _window
 	local function GetDebugWindow()
 		if not _window then
@@ -51,14 +54,16 @@ _G["BINDING_NAME_CLICK SilverDragonMacroButton:LeftButton"] = "Scan for nearby m
 addon.escapes = {
 	-- |TTexturePath:size1:size2:xoffset:yoffset:dimx:dimy:coordx1:coordx2:coordy1:coordy2|t
 	-- |A:atlas:height:width[:offsetX:offsetY]|a
-	-- leftClick = [[|TInterface\TUTORIALFRAME\UI-TUTORIAL-FRAME:19:11:-1:0:512:512:9:67:227:306|t]],
-	-- rightClick = [[|TInterface\TUTORIALFRAME\UI-TUTORIAL-FRAME:20:12:0:-1:512:512:9:66:332:411|t]],
 	leftClick = CreateAtlasMarkup("newplayertutorial-icon-mouse-leftbutton", 12, 15),
 	rightClick = CreateAtlasMarkup("newplayertutorial-icon-mouse-rightbutton", 12, 15),
 	keyDown = [[|TInterface\TUTORIALFRAME\UI-TUTORIAL-FRAME:0:0:0:-1:512:512:9:66:437:490|t]],
 	green = _G.GREEN_FONT_COLOR_CODE,
 	red = _G.RED_FONT_COLOR_CODE,
 }
+if ns.CLASSIC then
+	addon.escapes.leftClick = [[|TInterface\TUTORIALFRAME\UI-TUTORIAL-FRAME:19:11:-1:0:512:512:9:67:227:306|t]]
+	addon.escapes.rightClick = [[|TInterface\TUTORIALFRAME\UI-TUTORIAL-FRAME:20:12:0:-1:512:512:9:66:332:411|t]]
+end
 
 
 addon.datasources = {
@@ -114,11 +119,67 @@ ns.vignetteMobLookup = vignetteMobLookup
 ns.vignetteTreasureLookup = {
 	-- [vignetteid] = { data },
 }
-function addon:RegisterMobData(source, data)
-	addon.datasources[source] = data
+function addon:RegisterMobData(source, data, updated)
+	if not updated then
+		if not self.HASWARNEDABOUTOLDDATA then
+			self.HASWARNEDABOUTOLDDATA = true
+			return self:Print(("You have an old SilverDragon_%s folder, which can be removed"):format(source))
+		end
+		return
+	end
+	if not addon.datasources[source] then addon.datasources[source] = {} end
+	MergeTable(addon.datasources[source], data)
 end
-function addon:RegisterTreasureData(source, data)
-	addon.treasuresources[source] = data
+function addon:RegisterTreasureData(source, data, updated)
+	if not updated then return end
+	if not addon.treasuresources[source] then addon.treasuresources[source] = {} end
+	MergeTable(addon.treasuresources[source], data)
+end
+do
+	function addon:RegisterHandyNotesData(source, uiMapID, points, defaults)
+		-- convenience for me, really...
+		addon.datasources[source] = addon.datasources[source] or {}
+		addon.treasuresources[source] = addon.treasuresources[source] or {}
+		for coord, point in pairs(points) do
+			if point.npc or point.vignette then
+				if defaults then
+					for k,v in pairs(defaults) do
+						if k == "note" and point[k] then
+							point[k] = v .. "\n" .. point[k]
+						end
+						point[k] = point[k] or v
+					end
+				end
+				local data = {
+					name=point.label,
+					locations={[uiMapID]={coord}},
+					loot=point.loot,
+					notes=point.note,
+					active=point.active,
+					requires=point.require or point.hide_before,
+					vignette=point.vignette,
+					quest=point.quest,
+				}
+				if point.route and type(point.route) == "table" then
+					data.routes = {[uiMapID] = {point.route}}
+				end
+				if point.routes then
+					data.routes = {[uiMapID] = point.routes}
+				end
+				if point.npc then
+					addon.datasources[source][point.npc] = data
+					if point.achievement and point.criteria then
+						if not ns.achievements[point.achievement] then
+							ns.achievements[point.achievement] = {}
+						end
+						ns.achievements[point.achievement][point.npc] = point.criteria
+					end
+				else
+					addon.treasuresources[source][point.vignette] = data
+				end
+			end
+		end
+	end
 end
 do
 	local function addQuestMobLookup(mobid, quest)
@@ -172,8 +233,6 @@ do
 		for source, data in pairs(addon.datasources) do
 			if addon.db.global.datasources[source] then
 				for mobid, mobdata in pairs(data) do
-					self:NameForMob(mobid) -- prime cache
-
 					mobdata.id = mobid
 					mobdata.source = source
 
@@ -209,20 +268,11 @@ function addon:OnInitialize()
 			always = {
 			},
 			ignore = {
+				['*'] = false,
 				[64403] = true, -- Alani
 			},
 			ignore_datasource = {
 				-- "BurningCrusade" = true,
-			},
-		},
-		locale = {
-			quest_name = {
-				-- store localized quest names
-				-- [id] = "name"
-			},
-			mob_name = {
-				-- store localized mob names
-				-- [id] = "name"
 			},
 		},
 		profile = {
@@ -230,9 +280,16 @@ function addon:OnInitialize()
 			delay = 1200, -- number of seconds to wait between recording the same mob
 			instances = false,
 			taxi = true,
+			charloot = false,
+			lootappearances = true,
 		},
 	}, true)
 	globaldb = self.db.global
+
+	if self.db.locale and self.db.locale.mob_name then
+		self.db.locale.mob_name = nil
+		self.db.locale.quest_name = nil
+	end
 
 	if SilverDragon2DB and SilverDragon2DB.global then
 		-- Migrating some data from v2
@@ -336,8 +393,8 @@ do
 	function addon:IsMobInPhase(id, zone)
 		local phased, poi = true, true
 		if not mobdb[id] then return end
-		if mobdb[id].phase then
-			phased = mobdb[id].phase == C_Map.GetMapArtID(zone)
+		if mobdb[id].art then
+			phased = mobdb[id].art == C_Map.GetMapArtID(zone)
 		end
 		if mobdb[id].poi then
 			poi = checkPois(unpack(mobdb[id].poi))
@@ -387,7 +444,7 @@ do
 			Debug("Skipping notification: seen", id, lastseen[id..zone], time() - self.db.profile.delay, source)
 			return
 		end
-		if (not self.db.profile.taxi) and UnitOnTaxi('player') then
+		if not self:PlayerIsInteractive() then
 			Debug("Skipping notification: taxi", id, source)
 			return
 		end
@@ -430,6 +487,18 @@ do
 			end
 		end
 	end
+end
+
+function addon:PlayerIsInteractive()
+	if (not self.db.profile.taxi) and UnitOnTaxi('player') then
+		return false
+	end
+	if IsInCinematicScene() or InCinematic() then
+		-- TODO: should I repurpose the taxi preference to just apply to any
+		-- not-interactive state?
+		return false
+	end
+	return true
 end
 
 -- Scanning:

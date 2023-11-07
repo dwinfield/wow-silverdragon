@@ -51,11 +51,36 @@ function module:ShowFrame(data)
 end
 
 function module:RefreshData(popup)
-	if popup.data.type == "mob" then
-		return self:RefreshMobData(popup)
+	local data = popup.data
+	if data.type == "mob" then
+		self:RefreshMobData(popup)
 	else
-		return self:RefreshLootData(popup)
+		self:RefreshLootData(popup)
 	end
+	local isTreasure = data.type == "loot"
+	local anyLoot = ns.Loot.GetLootTable(data.id, isTreasure)
+	if anyLoot and #anyLoot > 0 then
+		popup.lootIcon.count:SetText("?")
+		popup.lootIcon:Show()
+	else
+		popup.lootIcon:Hide()
+	end
+	ns.Loot.OnceAllLootLoaded(data.id, data.type == "loot", function(loot)
+		if popup.waitingToHide then return end
+		local hasLoot, lootCount, suitableLootCount = ns.Loot.HasLoot(data.id, isTreasure)
+		if hasLoot then
+			popup.lootIcon:Show()
+			popup.lootIcon.count:SetText(suitableLootCount)
+		else
+			popup.lootIcon:Hide()
+		end
+		if ns.Loot.Status(data.id, true, data.type == "loot") then
+			-- all loot is collected
+			popup.lootIcon.complete:Show()
+		else
+			popup.lootIcon.complete:Hide()
+		end
+	end)
 end
 
 function module:RefreshMobData(popup)
@@ -69,21 +94,6 @@ function module:RefreshMobData(popup)
 	else
 		popup.status:SetText("")
 	end
-
-	local loot = ns.Loot.HasLoot(data.id)
-	if loot then
-		popup.lootIcon:Show()
-		popup.lootIcon.count:SetText(#loot)
-		ns.Loot.Cache(data.id)
-	else
-		popup.lootIcon:Hide()
-	end
-	if ns.Loot.Status(data.id, true) then
-		-- all loot is collected
-		popup.lootIcon.complete:Show()
-	else
-		popup.lootIcon.complete:Hide()
-	end
 end
 function module:RefreshLootData(popup)
 	local data = popup.data
@@ -91,8 +101,6 @@ function module:RefreshLootData(popup)
 	popup.source:SetText("vignette")
 	-- TODO: work out the Treasure of X achievements?
 	popup.status:SetText("")
-	-- TODO: know about loot?
-	popup.lootIcon:Hide()
 	popup.raidIcon:Hide()
 end
 
@@ -127,6 +135,7 @@ function module:SetModel(popup)
 	-- reset the model
 	popup.model:ClearModel()
 	popup.model:SetModelScale(1)
+	popup.model:SetModelAlpha(1)
 	popup.model:SetPosition(0, 0, 0)
 	popup.model:SetFacing(0)
 	popup.model.fallback:Hide()
@@ -194,12 +203,10 @@ function module:CreatePopup(look)
 	popup:SetScale(self.db.profile.anchor.scale)
 	popup:SetMovable(true)
 	popup:SetClampedToScreen(true)
-	popup:RegisterForClicks("AnyUp")
+	popup:RegisterForClicks("AnyDown", "AnyUp") -- dragonflight: anydown+anyup required to function
 
 	popup:SetAttribute("type", "macro")
-	-- popup:SetAttribute("_onshow", "self:Enable()")
-	-- popup:SetAttribute("_onhide", "self:Disable()")
-	-- Can't do type=click + clickbutton=close because then it'd be right-clicking the close button which also ignores the mob
+	-- macrotext is set elsewhere
 	popup:SetAttribute("macrotext2", "/click " .. popup:GetName() .. "CloseButton")
 
 	popup:Hide()
@@ -216,7 +223,7 @@ function module:CreatePopup(look)
 
 	local model = CreateFrame("PlayerModel", nil, popup)
 	popup.model = model
-	local modelfallback = model:CreateTexture(nil, "OVERLAY")
+	local modelfallback = model:CreateTexture(nil, "ARTWORK")
 	modelfallback:SetAllPoints(model)
 	modelfallback:Hide()
 	model.fallback = modelfallback
@@ -429,14 +436,18 @@ PopupMixin.scripts = {
 		self[event](self, event, ...)
 	end,
 	OnEnter = function(self)
-		if self.waitingToHide then
+		if self.waitingToHide or not self.data then
 			-- we're "hidden" via alpha==0 now, so no tooltip
 			return
 		end
 
 		local anchor = (self:GetCenter() < (UIParent:GetWidth() / 2)) and "ANCHOR_RIGHT" or "ANCHOR_LEFT"
 		GameTooltip:SetOwner(self, anchor, 0, -60)
-		GameTooltip:AddDoubleLine(escapes.leftClick .. " " .. TARGET, escapes.rightClick .. " " .. CLOSE)
+		if self.data.type == "mob" then
+			GameTooltip:AddDoubleLine(escapes.leftClick .. " " .. TARGET, escapes.rightClick .. " " .. CLOSE)
+		else
+			GameTooltip:AddDoubleLine(" ", escapes.rightClick .. " " .. CLOSE)
+		end
 		local uiMapID, x, y = module:GetPositionFromData(self.data, false)
 		if uiMapID and x and y then
 			GameTooltip:AddDoubleLine(core.zone_names[uiMapID] or UNKNOWN, ("%.1f, %.1f"):format(x * 100, y * 100),
@@ -454,7 +465,7 @@ PopupMixin.scripts = {
 		end
 
 		GameTooltip:AddDoubleLine(ALT_KEY_TEXT .. " + " .. escapes.leftClick .. " + " .. DRAG_MODEL, MOVE_FRAME)
-		if uiMapID and C_Map.CanSetUserWaypointOnMap(uiMapID) then
+		if module:CanPoint(uiMapID) then
 			GameTooltip:AddDoubleLine(CTRL_KEY_TEXT .. " + " .. escapes.leftClick, MAP_PIN )
 		end
 		if uiMapID and x and y then
@@ -518,7 +529,7 @@ PopupMixin.scripts = {
 	OnShow = function(self)
 		if not self.data then
 			-- Things which show/hide UIParent (cinematics) *might* get us here without data
-			return self:Hide()
+			return self:HideWhenPossible()
 		end
 		module:ResetLook(self)
 
@@ -581,15 +592,17 @@ PopupMixin.scripts = {
 		if self:GetParent().waitingToHide then
 			return
 		end
-		local id = self:GetParent().data.id
-		if not ns.mobdb[id] then
-			return
-		end
+		local data = self:GetParent().data
+		if not (data and data.id) then return end
 		local anchor = (self:GetCenter() < (UIParent:GetWidth() / 2)) and "ANCHOR_RIGHT" or "ANCHOR_LEFT"
 		GameTooltip:SetOwner(self, anchor, 0, 0)
 		GameTooltip:SetFrameStrata("TOOLTIP")
-		GameTooltip:AddDoubleLine(core:GetMobLabel(id), "Loot")
-		ns.Loot.Summary.UpdateTooltip(GameTooltip, id)
+		if data.type == "mob" then
+			GameTooltip:AddDoubleLine(core:GetMobLabel(data.id), "Loot")
+		else
+			GameTooltip:AddDoubleLine(data.name or UNKNOWN, "Loot")
+		end
+		ns.Loot.Summary.UpdateTooltip(GameTooltip, data.id, false, data.type == "loot")
 		GameTooltip:AddLine(CLICK_FOR_DETAILS, 0, 1, 1)
 		GameTooltip:Show()
 	end,
@@ -601,7 +614,8 @@ PopupMixin.scripts = {
 			return
 		end
 		if not self.window then
-			self.window = ns.Loot.Window.ShowForMob(self:GetParent().data.id)
+			local data = self:GetParent().data
+			self.window = ns.Loot.Window.ShowForMob(data.id, false, data.type == "loot")
 			self.window:SetParent(self)
 			self.window:Hide()
 		end
@@ -628,7 +642,13 @@ PopupMixin.scripts = {
 		self:GetParent():Hide()
 	end,
 	AnimationRequestHideParent = function(self)
-		self:GetParent():HideWhenPossible()
+		local parent = self:GetParent()
+		if parent.model:IsVisible() then
+			-- 10.0 bug: the models within a Model don't inherit alpha
+			-- We *can* directly set the interior model alpha, though
+			parent.model:SetModelAlpha(0)
+		end
+		parent:HideWhenPossible()
 	end,
 }
 function PopupMixin:COMBAT_LOG_EVENT_UNFILTERED()

@@ -27,19 +27,11 @@ externals:
    lib/HereBeDragons: https://repos.wowace.com/wow/herebedragons
    lib/LibTextDump-1.0: https://repos.wowace.com/wow/libtextdump-1-0
    lib/LibWindow-1.1: https://repos.wowace.com/wow/libwindow-1-1/trunk/LibWindow-1.1
+   lib/LibUIDropDownMenu: https://repos.curseforge.com/wow/libuidropdownmenu/trunk/LibUIDropDownMenu
 
 move-folders:
    SilverDragon/Overlay: SilverDragon_Overlay
    SilverDragon/RangeExtender: SilverDragon_RangeExtender
-   SilverDragon/Data/Vanilla: SilverDragon_Vanilla
-   SilverDragon/Data/BurningCrusade: SilverDragon_BurningCrusade
-   SilverDragon/Data/Wrath: SilverDragon_Wrath
-   SilverDragon/Data/Cataclysm: SilverDragon_Cataclysm
-   SilverDragon/Data/Mists: SilverDragon_Mists
-   SilverDragon/Data/Warlords: SilverDragon_Warlords
-   SilverDragon/Data/Legion: SilverDragon_Legion
-   SilverDragon/Data/BattleForAzeroth: SilverDragon_BattleForAzeroth
-   SilverDragon/Data/Shadowlands: SilverDragon_Shadowlands
 
 ignore:
    - tools

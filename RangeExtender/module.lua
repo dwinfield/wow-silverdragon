@@ -26,7 +26,7 @@ function module:OnInitialize()
 		},
 	})
 
-	compat_disabled = IsAddOnLoaded("MinimapRangeExtender")
+	compat_disabled = IsAddOnLoaded("MinimapRangeExtender") or (LE_EXPANSION_LEVEL_CURRENT < (LE_EXPANSION_MISTS_OF_PANDARIA or 999))
 	self.compat_disabled = compat_disabled
 
 	self.pool = CreateFramePool("FRAME", Minimap, "SilverDragonVignetteStretchPinTemplate")
@@ -35,6 +35,7 @@ function module:OnInitialize()
 end
 
 function module:OnEnable()
+	if self.compat_disabled then return end
 	self:RegisterEvent("VIGNETTE_MINIMAP_UPDATED")
 	self:RegisterEvent("VIGNETTES_UPDATED")
 	self:RegisterEvent("PLAYER_ENTERING_WORLD", "VIGNETTES_UPDATED")
@@ -106,16 +107,21 @@ function module:UpdateVignetteOnMinimap(instanceid)
 		return -- Debug("vignette had no position")
 	end
 	local x, y = position:GetXY()
+	if self:ShouldHideVignette(vignetteInfo, uiMapID, x, y) then
+		return
+	end
 
 	local icon = vignetteIcons[instanceid]
 	if not icon then
 		icon = self.pool:Acquire()
 		icon.texture:SetAtlas(vignetteInfo and vignetteInfo.atlasName or "poi-nzothvision")
+		icon.texture:SetAlpha(vignetteInfo and 1 or 0.7)
 		icon.texture:SetDesaturated(true)
 		vignetteIcons[instanceid] = icon
 		HBDPins:AddMinimapIconMap(self, icon, uiMapID, x, y, false, true)
 		-- icon.instanceid = instanceid
 		icon.info = vignetteInfo
+		icon.coord = core:GetCoord(x, y)
 	end
 
 	if vignetteInfo and vignetteInfo.onMinimap then
@@ -125,6 +131,37 @@ function module:UpdateVignetteOnMinimap(instanceid)
 	end
 
 	self:UpdateEdge(icon)
+end
+
+do
+	-- These show up for glowing highlights on NPCs in-town a lot, which gets in the way
+	local inconvenient = {
+		[2022] = { -- Waking Shores
+			[47118257] = true,
+			[47318338] = true,
+		},
+		[2023] = { -- Ohn'ahran Plains
+			[60403766] = true,
+		},
+		[2024] = { -- Azure Span
+			[12824918] = true,
+			[13144926] = true,
+		},
+		[2112] = { -- Valdrakken
+			[58173512] = true,
+		},
+		[2133] = { -- Zalarak Cavern
+			[56535566] = true,
+		},
+		[2151] = { -- Forbidden Reach
+			[34325998] = true,
+			[34085997] = true,
+		},
+	}
+	function module:ShouldHideVignette(vignetteInfo, uiMapID, x, y)
+		if not inconvenient[uiMapID] then return end
+		return inconvenient[uiMapID][core:GetCoord(x, y)]
+	end
 end
 
 function module:UpdateEdge(icon)
@@ -152,6 +189,9 @@ function SilverDragonVignetteStretchPinMixin:OnMouseEnter()
 	GameTooltip_SetTitle(GameTooltip, self.info and self.info.name or UNKNOWN)
 	if not self.info then
 		GameTooltip:AddLine("This mystery vignette has no information available", 1, 1, 1, true)
+		if core.debuggable then
+			GameTooltip:AddDoubleLine(LOCATION_COLON, self.coord)
+		end
 	end
 	GameTooltip:Show()
 end
